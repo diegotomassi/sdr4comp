@@ -1,0 +1,267 @@
+---
+title: "SDR for Compositional Data - Example R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+<!-- This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.  -->
+
+<!-- Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.  -->
+
+<!-- ```{r} -->
+<!-- plot(cars) -->
+<!-- ``` -->
+
+<!-- Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*. -->
+
+<!-- When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file). -->
+
+<!-- The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed. -->
+
+Now we load the packages we will require along the analysis.
+```{r}
+source("sdrtools.R")
+```
+
+First we load the data and check for possible variables without expression. Data comes in three different files. One with the compositional data (relative abundance), one with the total number of reads for each sample and one with the labels.
+
+```{r}
+compositions = read.csv('./data/HMP/HMPdataL2.txt',header=FALSE)
+totals = read.table("./data/HMP/HMPdataL2reads.txt")
+labels = read.table("./data/HMP/HMPlabels.txt")
+HMPdata = checkData(compositions,totals,labels)
+X.counts = HMPdata$counts
+Y = HMPdata$labels
+
+sites = c('Stool','Saliva','Skin','Nasal','Vagina')
+groups = NULL
+for (n in 1:length(Y)){
+  groups[n] = sites[Y[n]]
+}
+groups = as.factor(groups)
+```
+
+We start with visualization. We first analize the data applying widely used tools derived from pairwise distance matrices. In particular, we use PCoA as implemented in APE and MDS as implemented in VEGAN.
+
+```{r}
+
+library(vegan)
+library(ape)
+library(plotly)
+symbols = c("triangle-up-dot","circle-open","diamond-open","cross","square-open")
+
+logX = log(X.counts+1)
+Dmtx = vegdist(logX)
+res = pcoa(Dmtx)
+
+pcoa2plot = data.frame(Y=groups,X1=res$vectors[,1],X2=res$vectors[,2])
+ggplot(pcoa2plot, aes(x=X1, y=X2, color=groups, shape=groups)) + 
+  geom_point(size=3, alpha=0.8) + xlab('PCoA-1') + ylab('PCoA-2')
+
+```
+
+```{r}
+nmds = metaMDS(X.counts,autotransform = FALSE,trace=0)
+
+nmds2plot = data.frame(Y=groups,X1=nmds$points[,1],X2=nmds$points[,2])
+ggplot(nmds2plot, aes(x=X1, y=X2, color=groups, shape=groups)) + 
+  geom_point(size=3, alpha=0.8) + xlab('MDS-1') + ylab('MDS-2')
+
+```
+Let's take a look first to the full-rank reduction:
+
+```{r}
+normal.fit = sdr4normal.fit(X.counts,Y,4)
+projLN = sdr4normal.project(normal.fit,X.counts)
+
+par(mfrow=c(2,2))
+boxplot(projLN[,1]~groups, main="Projection onto Normal-SDR-1",ylab = "SDR-1")
+boxplot(projLN[,2]~groups, main="Projection onto Normal-SDR-2",ylab = "SDR-2")
+boxplot(projLN[,3]~groups, main="Projection onto Normal-SDR-3",ylab = "SDR-3")
+boxplot(projLN[,4]~groups, main="Projection onto Normal-SDR-4",ylab = "SDR-4")
+``` 
+
+Now we use SDR with the normal model on the log-contrast transformation. We first estimate the best dimension for the reduction:
+
+```{r}
+d = testDim4sdr(X.counts,Y,"normal",alpha=0.05)
+print(d)
+``` 
+
+
+We now compute the estimate corresponding to the estimated dimension:
+```{r}
+normal.fit = sdr4normal.fit(X.counts,Y,d,lambda=1.0)
+projLN = sdr4normal.project(normal.fit,X.counts)
+
+resuLN = data.frame(Y=groups,X1=projLN[,1],X2=projLN[,2])
+ggplot(resuLN, aes(x=X1, y=X2, color=groups, shape=groups)) + 
+  geom_point(size=3, alpha=0.8) + xlab('N-SDR-1') + ylab('N-SDR-2')
+
+```
+
+
+
+
+Let's repeat the analysis using the multinomial model. Let's take a look first to the full-rank reduction:
+
+```{r}
+mn.fit = sdr4multinomial.fit(X.counts,Y,4)
+projMN = sdr4multinomial.project(mn.fit,X.counts)
+
+par(mfrow=c(2,2))
+boxplot(projMN[,1]~groups, main="Projection onto Multinomial-SDR-1",ylab = "SDR-1")
+boxplot(projMN[,2]~groups, main="Projection onto Multinomial-SDR-2",ylab = "SDR-2")
+boxplot(projMN[,3]~groups, main="Projection onto Multinomial-SDR-3",ylab = "SDR-3")
+boxplot(projMN[,4]~groups, main="Projection onto Multinomial-SDR-4",ylab = "SDR-4")
+``` 
+
+Now we test for the dimension and repeat the analysis, including variable selection:
+
+```{r}
+d = testDim4sdr(X.counts,Y,"multinomial")
+print("Estimated dimension is:")
+d
+```
+
+```{r}
+mn.fit = sdr4multinomial.fit(X.counts,Y,d,lambda=1.5)
+projMN = sdr4multinomial.project(mn.fit,X.counts)
+
+resuMN = data.frame(Y=groups,X1=projMN[,1],X2=projMN[,2])
+ggplot(resuMN, aes(x=X1, y=X2, color=groups, shape=groups)) + 
+  geom_point(size=3, alpha=0.8) + xlab('MN-SDR-1') + ylab('MN-SDR-2')
+
+```
+
+Now we repeat the analysis using a PGM model. We start we the full-rank estimate before testing for the dimension:
+
+```{r}
+pgm.fit = sdr4pgmR.fit(X.counts,Y,4)
+projPGM = sdr4pgmR.project(pgm.fit,X.counts)
+
+par(mfrow=c(2,2))
+boxplot(projPGM[,1]~groups, main="Projection onto PGM-SDR-1",ylab = "SDR-1")
+boxplot(projPGM[,2]~groups, main="Projection onto PGM-SDR-2",ylab = "SDR-2")
+boxplot(projPGM[,3]~groups, main="Projection onto PGM-SDR-3",ylab = "SDR-3")
+boxplot(projPGM[,4]~groups, main="Projection onto PGM-SDR-4",ylab = "SDR-4")
+``` 
+
+We now test for the dimension of the reduction:
+```{r}
+d = testDim4sdr(X.counts,Y,"PGM")
+print(d)
+```
+```{r}
+pgm.fit = sdr4pgmR.fit(X.counts,Y,d,2.5)
+projPGM = sdr4pgmR.project(pgm.fit,X.counts)
+
+resuPGM = data.frame(Y=groups,X1=projPGM[,1],X2=projPGM[,2],X3=projPGM[,3])
+library(plotly)
+myscene = scene4plot3d("FPGM")
+plot_ly(resuPGM,x=resuPGM$X1,y=resuPGM$X2,z=resuPGM$X3,type="scatter3d",mode="markers", marker = list(size=3,alpha=0.8), symbols = symbols, color = resuPGM$Y,symbol = resuPGM$Y) %>%
+layout(scene=myscene)
+
+```
+
+
+To test for overall association, we fit a linear model with the reduction and perform a MANOVA analysis:
+
+```{r}
+library(car)
+mod = lm(pgm.fit$proj~groups)
+Manova(mod)
+```
+
+
+We have already used variable selection when fitting the reductions prior to visualization. Let us point out that the variable selection induced here is different form the one in Taddy (Annals of Appled Statistics, 2015), Distributed Multinomial Regression. In particular, our algorithms induce structured variable selection, which allows for effective selection of whole rows of the coefficient matrix. Let's see this in the example with the HMP data set:
+
+```{r}
+mn.fit = dmr(cl=NULL,covars=get_fyZ(Y),counts=X.counts)
+(bhat_taddy = t(as.matrix(coef(mn.fit)))[,-1])
+```
+
+It is clear that Taddy's estimator does not induce any variable selection but only sparsity of the coefficient matrix:
+
+```{r}
+print("The selected variables are:")
+(idxsel_taddy = which(apply(bhat_taddy,1,Norm)>0.0000001))
+
+```
+
+Now, applying our method for the multinomial we get:
+
+```{r}
+mn.fit = sdr4multinomial.fit(X.counts,Y,4,lambda=1.5)
+(bhat = mn.fit$bhat)
+print("The selected variables are:")
+(idxsel = which(apply(bhat,1,Norm)>0.0000001))
+```
+
+
+We now discuss performance in prediction. For this we run a 10-fold cross-validation experiment using standard sampling to generate the CV partitions. (To reduce computing time, we have set a fixed value of the regularization parameter for all the aprtitions. Thus, the resulting error rates can be slightly higher than the minimum attainable)
+```{r}
+set.seed(100)
+kfold = 10
+parts = sample(1:kfold,length(Y),replace=TRUE)
+
+Xtrain = list()
+Xtest = list()
+Ytrain=list()
+Ytest=list()
+
+for (k in 1:kfold){
+  Xtrain[[k]] = X.counts[parts!=k,]
+  Xtest[[k]] = X.counts[parts==k,]
+  Ytrain[[k]] = Y[parts!=k]
+  Ytest[[k]] = Y[parts==k]
+}
+
+errores.mn = numeric(kfold)
+errores.ln = numeric(kfold)
+errores.p = numeric(kfold)
+errores.pgm = numeric(kfold)
+capture.output({
+for (k in 1:kfold){
+  print(k)
+  # reduce using sdr-normal
+  fit.ln = sdr4normal.fit(Xtrain[[k]],Ytrain[[k]],dim=2,lambda = 15.0)
+  classfit = glmnet(fit.ln$proj,Ytrain[[k]],family="multinomial")
+  proj.ln = sdr4normal.project(fit.ln,Xtest[[k]])
+  probs = predict(classfit,proj.ln,s=0.0,response="class")
+  yhat = apply(probs,1,which.max)
+  errores.ln[k] = mean(yhat!=Ytest[[k]])  
+  
+  # reduce using sdr-multinomial
+  fit.mn = sdr4multinomial.fit(x=Xtrain[[k]],y=Ytrain[[k]],lambda=1.5)
+  classfit = glmnet(fit.mn$proj,Ytrain[[k]],family="multinomial")
+  proj.mn = sdr4multinomial.project(fit.mn,Xtest[[k]])
+  probs = predict(classfit,proj.mn,s=0.0,response="class")
+  yhat = apply(probs,1,which.max)
+  errores.mn[k] = mean(yhat!=Ytest[[k]])
+  
+  # reduce using sdr-PGM
+  fit.pgm = sdr4pgmR.fit(x=Xtrain[[k]],y=Ytrain[[k]])
+  classfit = glmnet(fit.pgm$proj,Ytrain[[k]],family="multinomial")
+  proj.pgm = sdr4pgmR.project(fit.pgm,Xtest[[k]])
+  probs = predict(classfit,proj.pgm,s=0.0,response="class")
+  yhat = apply(probs,1,which.max)
+  errores.pgm[k] = mean(yhat!=Ytest[[k]])
+  
+  
+  # benchmark without reduction
+  auxfit = cv.glmnet(Xtrain[[k]],Ytrain[[k]],family="multinomial")
+  classfit = glmnet(Xtrain[[k]],Ytrain[[k]],family="multinomial")
+  probs = predict(classfit,Xtest[[k]],s=auxfit$lambda.1se,response="class")
+  yhat = apply(probs,1,which.max)
+  errores.p[k] = mean(yhat!=Ytest[[k]])  
+}
+})
+
+(apply(cbind(errores.p,errores.ln,errores.mn,errores.pgm),2,median)) 
+
+```
+
