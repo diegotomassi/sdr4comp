@@ -6,3 +6,5 @@ If using this software, please cite:
 Submitted.
 
 The code in the R Notebook extends on the example shown in the paper.
+
+Thank you for your interest in our work.
